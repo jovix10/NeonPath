@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Neon Path: PROTOCOLO A*</title>
+    <style>
+        body { background: #020202; color: #0ff; font-family: 'Courier New', monospace; display: flex; flex-direction: column; align-items: center; margin: 0; overflow: hidden; }
+        canvas { border: 2px solid #0ff; box-shadow: 0 0 30px rgba(0, 255, 255, 0.5); margin-top: 10px; background: #000; cursor: none; }
+        .ui { margin-top: 10px; font-size: 1.1em; text-transform: uppercase; letter-spacing: 2px; text-align: center;}
+        .glitch { color: #f0f; text-shadow: 2px 2px #0ff; animation: glitch 1s infinite; }
+        @keyframes glitch { 0% { text-shadow: 2px 2px #0ff; } 50% { text-shadow: -2px -2px #f0f; } 100% { text-shadow: 2px 2px #0ff; } }
+        
+        #endScreen { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); flex-direction: column; align-items: center; justify-content: center; z-index: 10; border: 4px solid #0ff; }
+        #endScreen h1 { font-size: 4em; margin: 0; }
+        #endScreen p { font-size: 1.2em; line-height: 1.6; text-align: center; }
+        .success { color: #39ff14; text-shadow: 0 0 20px #39ff14; }
+        .failure { color: #ff0033; text-shadow: 0 0 20px #ff0033; }
+        button { background: none; border: 1px solid #0ff; color: #0ff; padding: 15px 30px; cursor: pointer; font-family: 'Courier New'; font-size: 1.2em; transition: 0.3s; }
+        button:hover { background: #0ff; color: #000; box-shadow: 0 0 20px #0ff; }
+    </style>
+</head>
+<body>
+    <div id="endScreen">
+        <h1 id="endTitle"></h1>
+        <p id="endDesc"></p>
+        <button onclick="location.reload()">REINICIALIZAR INSTÂNCIA</button>
+    </div>
+
+    <h2 class="glitch">NEON PATH</h2>
+    <canvas id="game" width="800" height="600"></canvas>
+    <div class="ui">AGENT_STATUS: <span style="color:#00f3ff">HIDDEN</span> | SENTINEL_LOGIC: <span style="color:#ff00ff">A-STAR_ACTIVE</span></div>
+
+<script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const gridSize = 40; 
+    const tileSize = canvas.width / gridSize;
+
+    let player = { x: 2, y: 2, angle: 0 };
+    let ai = { x: 37, y: 37 };
+    let goal = { x: 20, y: 15 };
+    let walls = [];
+    let gameActive = true;
+    let particles = [];
+
+    // Gerador de Labirinto Complexo
+    for(let i=0; i<550; i++) {
+        let w = { x: Math.floor(Math.random()*gridSize), y: Math.floor(Math.random()*gridSize) };
+        if (dist(w, player) > 4 && dist(w, goal) > 2 && dist(w, ai) > 4) walls.push(w);
+    }
+
+    function dist(a, b) { return Math.abs(a.x - b.x) + Math.abs(a.y - b.y); }
+
+    function draw() {
+        ctx.fillStyle = '#020202';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Desenhar Paredes
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#111';
+        walls.forEach(w => ctx.fillRect(w.x * tileSize, w.y * tileSize, tileSize-1, tileSize-1));
+
+        // Núcleo Verde (Objetivo)
+        ctx.shadowBlur = 25; ctx.shadowColor = '#39ff14';
+        ctx.fillStyle = '#39ff14';
+        ctx.fillRect(goal.x * tileSize + 6, goal.y * tileSize + 6, tileSize-12, tileSize-12);
+
+        // Renderizar Partículas (Rastros Neon)
+        particles.forEach((p, i) => {
+            p.opacity -= 0.015;
+            if(p.opacity <= 0) particles.splice(i, 1);
+            ctx.shadowBlur = 8; ctx.shadowColor = p.color;
+            ctx.fillStyle = `rgba(${p.rgb}, ${p.opacity})`;
+            ctx.fillRect(p.x, p.y, p.size, p.size);
+        });
+
+        // Personagem Hacker (Azul)
+        ctx.save();
+        ctx.translate(player.x * tileSize + tileSize/2, player.y * tileSize + tileSize/2);
+        ctx.rotate(player.angle);
+        ctx.shadowBlur = 15; ctx.shadowColor = '#00f3ff';
+        ctx.fillStyle = '#00f3ff';
+        ctx.beginPath();
+        ctx.moveTo(tileSize/2, 0); ctx.lineTo(-tileSize/3, tileSize/3); ctx.lineTo(-tileSize/3, -tileSize/3); ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+
+        // Personagem Sentinel (Rosa - IA Suprema)
+        ctx.shadowBlur = 20; ctx.shadowColor = '#ff00ff';
+        ctx.fillStyle = '#202'; ctx.strokeStyle = '#ff00ff'; ctx.lineWidth = 2;
+        ctx.fillRect(ai.x * tileSize + 2, ai.y * tileSize + 2, tileSize-4, tileSize-4);
+        ctx.strokeRect(ai.x * tileSize + 2, ai.y * tileSize + 2, tileSize-4, tileSize-4);
+        // Olho da IA
+        ctx.fillStyle = (Math.random()>0.9) ? '#fff' : '#ff00ff';
+        ctx.fillRect(ai.x * tileSize + tileSize/3, ai.y * tileSize + tileSize/3, tileSize/3, tileSize/3);
+    }
+
+    // --- ALGORITMO A* (BUSCA DE CAMINHO OTIMIZADA) ---
+    function updateAI() {
+        if(!gameActive) return;
+
+        let startNode = { x: ai.x, y: ai.y, g: 0, h: dist(ai, player), f: 0, parent: null };
+        let openList = [startNode];
+        let closedList = [];
+
+        while (openList.length > 0) {
+            let lowInd = 0;
+            for(let i=0; i<openList.length; i++) {
+                if(openList[i].f < openList[lowInd].f) lowInd = i;
+            }
+            let currentNode = openList[lowInd];
+
+            if (currentNode.x === player.x && currentNode.y === player.y) {
+                let path = [];
+                let curr = currentNode;
+                while(curr.parent) { path.push(curr); curr = curr.parent; }
+                if(path.length > 0) {
+                    let nextStep = path[path.length - 1];
+                    ai.x = nextStep.x;
+                    ai.y = nextStep.y;
+                }
+                break;
+            }
+
+            openList.splice(lowInd, 1);
+            closedList.push(currentNode);
+
+            const neighbors = [{x:0,y:1},{x:0,y:-1},{x:1,y:0},{x:-1,y:0}];
+            for (let d of neighbors) {
+                let neighborPos = { x: currentNode.x + d.x, y: currentNode.y + d.y };
+
+                if (neighborPos.x < 0 || neighborPos.x >= gridSize || neighborPos.y < 0 || neighborPos.y >= gridSize ||
+                    walls.some(w => w.x === neighborPos.x && w.y === neighborPos.y) ||
+                    closedList.some(c => c.x === neighborPos.x && c.y === neighborPos.y)) {
+                    continue;
+                }
+
+                let gScore = currentNode.g + 1;
+                let hScore = dist(neighborPos, player);
+                let res = openList.find(o => o.x === neighborPos.x && o.y === neighborPos.y);
+
+                if(!res) {
+                    openList.push({ ...neighborPos, g: gScore, h: hScore, f: gScore + hScore, parent: currentNode });
+                } else if (gScore < res.g) {
+                    res.g = gScore;
+                    res.f = gScore + res.h;
+                    res.parent = currentNode;
+                }
+            }
+            if(closedList.length > 800) break; // Trava de segurança
+        }
+
+        particles.push({x: ai.x*tileSize+tileSize/2, y:ai.y*tileSize+tileSize/2, size: tileSize/2, color: '#ff00ff', rgb: '255,0,255', opacity: 1});
+        if (ai.x === player.x && ai.y === player.y) endGame(false);
+        draw();
+    }
+
+    // Loop da IA (300ms para ser desafiador mas possível)
+    let aiInterval = setInterval(updateAI, 150);
+
+    function endGame(win) {
+        gameActive = false;
+        clearInterval(aiInterval);
+        document.getElementById('endScreen').style.display = 'flex';
+        const title = document.getElementById('endTitle');
+        const desc = document.getElementById('endDesc');
+
+        if(win) {
+            title.innerText = "SISTEMA DOMINADO";
+            title.className = "success";
+            desc.innerHTML = "STATUS: SUCESSO<br>NÚCLEO ENCRIPTADO COM SUCESSO.<br>VOCÊ É O MESTRE DOS DADOS.";
+        } else {
+            title.innerText = "CONEXÃO TERMINADA";
+            title.className = "failure";
+            desc.innerHTML = "STATUS: ERRO CRÍTICO<br>SENTINEL DETECTOU SEU TRAÇO DE IP.<br>O ANTIVÍRUS VENCEU.";
+        }
+    }
+
+    window.addEventListener('keydown', e => {
+        if(!gameActive) return;
+        let next = { x: player.x, y: player.y };
+        let angle = player.angle;
+
+        if (e.key === 'ArrowUp') { next.y--; angle = -Math.PI/2; }
+        if (e.key === 'ArrowDown') { next.y++; angle = Math.PI/2; }
+        if (e.key === 'ArrowLeft') { next.x--; angle = Math.PI; }
+        if (e.key === 'ArrowRight') { next.x++; angle = 0; }
+
+        if (next.x >= 0 && next.x < gridSize && next.y >= 0 && next.y < gridSize &&
+            !walls.some(w => w.x === next.x && w.y === next.y)) {
+            particles.push({x: player.x*tileSize+tileSize/2, y:player.y*tileSize+tileSize/2, size: tileSize/3, color: '#00f3ff', rgb: '0,243,255', opacity: 1});
+            player.x = next.x;
+            player.y = next.y;
+            player.angle = angle;
+        }
+
+        if (player.x === goal.x && player.y === goal.y) endGame(true);
+        draw();
+    });
+
+    setInterval(() => { if(gameActive) draw(); }, 30); // Loop de renderização suave
+</script>
+</body>
+</html>
